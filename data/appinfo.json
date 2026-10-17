@@ -1,0 +1,8 @@
+{
+  "id": "vn.sparc.esca.camview",
+  "title": "Camera",
+  "type": "native",
+  "main": "/usr/bin/esca-camview",
+  "user": "weston",
+  "removable": false
+}
