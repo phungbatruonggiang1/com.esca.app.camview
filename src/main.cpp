@@ -29,22 +29,25 @@ volatile std::sig_atomic_t g_quit = 0;
 void handle_signal(int) { g_quit = 1; }
 
 struct Options {
-    int rotation = 270;   ///< the sensor is mounted sideways on this board
+    int rotation = 0;     ///< none: the frame fills a 16:9 screen exactly
     uint32_t every = 3;   ///< ask the service to detect on every Nth frame
     double threshold = 0.5;
     bool detect = true;
     bool status = true;
+    int log_every = 0;   ///< seconds between status lines on stderr; 0 is off
 };
 
 int usage()
 {
     std::fprintf(stderr,
                  "usage: esca-camview [options]\n"
-                 "  --rotate DEG      0, 90, 180 or 270 clockwise (default 270)\n"
+                 "  --rotate DEG      0, 90, 180 or 270 clockwise (default 0)\n"
                  "  --every N         detect on every Nth frame (default 3)\n"
                  "  --threshold F     minimum score to draw (default 0.5)\n"
                  "  --no-detect       video only, do not talk to the vision service\n"
-                 "  --no-status       hide the status line\n");
+                 "  --no-status       hide the status line\n"
+                 "  --log N           also print the status line to stderr every N seconds,\n"
+                 "                    so the frame rate can be read without a screen\n");
     return 2;
 }
 
@@ -82,8 +85,16 @@ void draw_detections(uint32_t *pixels, int w, int h, int stride, const Viewport 
         if (ly < view.area.y)
             ly = box.y + kThickness + 2;
 
-        fill_rect(pixels, w, h, stride, { box.x, ly - 3, tw + 8, th + 6 }, 0xff000000);
-        draw_text(pixels, w, h, stride, box.x + 4, ly, label, colour, kScale);
+        // And it is pulled back inside the frame when the box is near the
+        // right edge, so a long label stays readable instead of running off
+        // the screen with half the word missing.
+        const int right = view.area.x + view.area.w;
+        int lx = box.x;
+        if (lx + tw + 8 > right)
+            lx = std::max(view.area.x, right - tw - 8);
+
+        fill_rect(pixels, w, h, stride, { lx, ly - 3, tw + 8, th + 6 }, 0xff000000);
+        draw_text(pixels, w, h, stride, lx + 4, ly, label, colour, kScale);
     }
 }
 
@@ -106,6 +117,7 @@ int main(int argc, char **argv)
         else if (arg == "--threshold") opt.threshold = std::stod(next());
         else if (arg == "--no-detect") opt.detect = false;
         else if (arg == "--no-status") opt.status = false;
+        else if (arg == "--log") opt.log_every = std::stoi(next());
         else return usage();
     }
 
@@ -166,6 +178,34 @@ int main(int argc, char **argv)
     int fps_frames = 0;
     double fps = 0.0;
 
+    auto log_since = std::chrono::steady_clock::now();
+    int drawn = 0;          ///< frames actually committed
+    int skipped = 0;        ///< frames dropped because both buffers were busy
+    double last_ms = 0.0;   ///< most recent inference time, for the log line
+    size_t last_objects = 0;
+    uint64_t last_seq = 0;
+
+    // Reported from both paths through the loop, so a run that draws nothing
+    // says so instead of going silent -- which is exactly the state worth
+    // hearing about.
+    auto report = [&] {
+        if (opt.log_every <= 0)
+            return;
+        const double since =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - log_since).count();
+        if (since < opt.log_every)
+            return;
+
+        std::fprintf(stderr,
+                     "esca-camview: %.1f fps drawn, %.1f/s skipped, inference %.0f ms, "
+                     "%zu objects, seq %llu\n",
+                     drawn / since, skipped / since, last_ms, last_objects,
+                     static_cast<unsigned long long>(last_seq));
+        drawn = 0;
+        skipped = 0;
+        log_since = std::chrono::steady_clock::now();
+    };
+
     while (!g_quit && !window.closed()) {
         if (!window.dispatch()) {
             std::fprintf(stderr, "esca-camview: compositor went away\n");
@@ -182,6 +222,8 @@ int main(int argc, char **argv)
         if (!pixels) {
             // Both buffers are still on the compositor's side. Skipping is
             // right: by the time one frees up this frame would be stale.
+            ++skipped;
+            report();
             continue;
         }
 
@@ -225,6 +267,12 @@ int main(int argc, char **argv)
         }
 
         window.present();
+        ++drawn;
+
+        last_ms = set.inference_ms;
+        last_objects = set.objects.size();
+        last_seq = info.sequence;
+        report();
     }
 
     if (detecting)

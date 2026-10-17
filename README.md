@@ -23,8 +23,9 @@ By hand, as the user that owns the Wayland session:
 
     XDG_RUNTIME_DIR=/run WAYLAND_DISPLAY=wayland-0 esca-camview
 
-Options: `--rotate 0|90|180|270` (default 270, see below), `--every N` frames
-per inference, `--threshold F`, `--no-detect` for video only, `--no-status`.
+Options: `--rotate 0|90|180|270` (default 0, see below), `--every N` frames
+per inference, `--threshold F`, `--no-detect` for video only, `--no-status`,
+`--log N` to print the frame rate to stderr every N seconds.
 
 ## Decisions worth knowing about
 
@@ -50,11 +51,14 @@ the compositor holds both, the viewer drops that frame instead of waiting:
 by the time one frees up, a newer frame has arrived and the old one is of no
 further use.
 
-**`--rotate 270` by default** because the sensor on this board is mounted
-sideways. The cost is black bars down both sides of a landscape screen — a
-720×1280 portrait image on a 1920×1080 display uses about a third of it.
-Mounting the camera the right way up and passing `--rotate 0` is the real
-fix; the option is here because the hardware is how it is.
+**No rotation by default.** A 1280×720 frame has the same 16:9 shape as the
+screen, so it fills all of it with no black bars. `--rotate 90|180|270` is
+there for a sensor mounted sideways, at a price worth knowing: rotating makes
+the source reads run down a column instead of along a row, which costs about
+2.2× per pixel (19.5 ns against 9.0 ns, measured on the board). A rotated
+portrait image is still cheaper overall — 38% of a core against 56% — but
+only because it covers a third of a landscape screen. Fixing the camera's
+mounting beats rotating in software.
 
 ## Layout
 

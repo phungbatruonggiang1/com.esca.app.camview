@@ -147,6 +147,13 @@ void fill_rect(uint32_t *dst, int dst_w, int dst_h, int dst_stride_px, const Rec
     const int x1 = std::min(dst_w, r.x + r.w);
     const int y1 = std::min(dst_h, r.y + r.h);
 
+    // Clamping alone is not enough. A rectangle that starts past the right
+    // edge leaves x0 > x1, and std::fill with first > last does not draw
+    // nothing -- it runs off the end of the buffer until it segfaults. That
+    // is what a caption on a detection near the right edge used to do.
+    if (x0 >= x1 || y0 >= y1)
+        return;
+
     for (int y = y0; y < y1; ++y) {
         uint32_t *row = dst + static_cast<size_t>(y) * dst_stride_px;
         std::fill(row + x0, row + x1, colour);
