@@ -17,10 +17,10 @@
 #include "esca/camera/client.hpp"
 #include "esca/vision/client.hpp"
 
-#include "render.hpp"
-#include "window.hpp"
+#include "esca/ui/render.hpp"
+#include "esca/ui/window.hpp"
 
-using namespace esca::camview;
+using namespace esca::ui;
 
 namespace {
 
