@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
@@ -9,9 +10,17 @@ import 'kit/widgets.dart';
 import 'vision.dart';
 
 class CamviewScreen extends StatelessWidget {
-  const CamviewScreen({super.key, required this.controller, required this.onBack});
+  const CamviewScreen({
+    super.key,
+    required this.controller,
+    required this.shader,
+    required this.onBack,
+  });
 
   final CamviewController controller;
+
+  /// shaders/i420.frag, which turns a frame's packed I420 into colour.
+  final ui.FragmentProgram shader;
   final VoidCallback onBack;
 
   @override
@@ -46,7 +55,7 @@ class CamviewScreen extends StatelessWidget {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Expanded(child: _Viewport(controller: controller)),
+                        Expanded(child: _Viewport(controller: controller, shader: shader)),
                         const SizedBox(width: 24),
                         SizedBox(width: 380, child: _SidePanel(controller: controller)),
                       ],
@@ -65,9 +74,10 @@ class CamviewScreen extends StatelessWidget {
 /// The picture, letterboxed into whatever room is left, with the boxes over
 /// it in the same coordinate space.
 class _Viewport extends StatelessWidget {
-  const _Viewport({required this.controller});
+  const _Viewport({required this.controller, required this.shader});
 
   final CamviewController controller;
+  final ui.FragmentProgram shader;
 
   @override
   Widget build(BuildContext context) {
@@ -85,7 +95,7 @@ class _Viewport extends StatelessWidget {
           child: ClipRRect(
             borderRadius: BorderRadius.circular(EscaRadius.card - 1),
             child: switch (controller.status) {
-              CameraStatus.streaming => _Video(controller: controller),
+              CameraStatus.streaming => _Video(controller: controller, shader: shader),
               CameraStatus.connecting => const _Placeholder(
                   icon: Icons.videocam_outlined,
                   title: 'Đang kết nối camera…',
@@ -115,20 +125,18 @@ class _Viewport extends StatelessWidget {
 }
 
 class _Video extends StatelessWidget {
-  const _Video({required this.controller});
+  const _Video({required this.controller, required this.shader});
 
   final CamviewController controller;
+  final ui.FragmentProgram shader;
 
   @override
   Widget build(BuildContext context) {
     return Stack(
       fit: StackFit.expand,
       children: [
-        ValueListenableBuilder<CameraFrame?>(
-          valueListenable: controller.frame,
-          builder: (context, frame, _) => frame == null
-              ? const SizedBox.shrink()
-              : RawImage(image: frame.image, fit: BoxFit.fill, filterQuality: FilterQuality.low),
+        RepaintBoundary(
+          child: CustomPaint(painter: _FramePainter(controller, shader.fragmentShader())),
         ),
         RepaintBoundary(
           child: CustomPaint(
@@ -228,6 +236,35 @@ class _Placeholder extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The picture: the newest frame's I420 through shaders/i420.frag, which
+/// converts and rotates it on the GPU. Repaints with every frame and nothing
+/// else.
+class _FramePainter extends CustomPainter {
+  _FramePainter(this.controller, this.shader) : super(repaint: controller.frame);
+
+  final CamviewController controller;
+  final ui.FragmentShader shader;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final frame = controller.frame.value;
+    if (frame == null) return;
+    shader
+      ..setFloat(0, size.width)
+      ..setFloat(1, size.height)
+      ..setFloat(2, frame.width.toDouble())
+      ..setFloat(3, frame.height.toDouble())
+      ..setFloat(4, controller.rotation / 90)
+      // Nearest: every texel is four unrelated bytes, and blending two of
+      // them would mix luma from different pixels.
+      ..setImageSampler(0, frame.planes, filterQuality: FilterQuality.none);
+    canvas.drawRect(Offset.zero & size, Paint()..shader = shader);
+  }
+
+  @override
+  bool shouldRepaint(_FramePainter old) => old.shader != shader;
 }
 
 Color classColor(int classId) => EscaColors.classes[classId % EscaColors.classes.length];

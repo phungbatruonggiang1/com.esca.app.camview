@@ -1,4 +1,5 @@
 import 'dart:io' show Platform;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
@@ -9,7 +10,10 @@ import 'kit/theme.dart';
 import 'kit/widgets.dart';
 import 'vision.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final shader = await ui.FragmentProgram.fromAsset('shaders/i420.frag');
+
   // A sensor mounted sideways is set in appinfo.json's "env", which is
   // where esca-appmanagerd takes per-application settings from.
   final rotation = int.tryParse(Platform.environment['ESCA_CAMVIEW_ROTATE'] ?? '') ?? 0;
@@ -21,6 +25,7 @@ void main() {
   );
   runApp(CamviewApp(
     controller: controller,
+    shader: shader,
     // The camera and the detector are let go before exiting, so the services
     // do not keep a client that is gone.
     onBack: () async {
@@ -31,9 +36,15 @@ void main() {
 }
 
 class CamviewApp extends StatelessWidget {
-  const CamviewApp({super.key, required this.controller, required this.onBack});
+  const CamviewApp({
+    super.key,
+    required this.controller,
+    required this.shader,
+    required this.onBack,
+  });
 
   final CamviewController controller;
+  final ui.FragmentProgram shader;
   final VoidCallback onBack;
 
   @override
@@ -42,7 +53,7 @@ class CamviewApp extends StatelessWidget {
       title: 'Camera AI',
       debugShowCheckedModeBanner: false,
       theme: escaTheme(),
-      home: CamviewScreen(controller: controller, onBack: onBack),
+      home: CamviewScreen(controller: controller, shader: shader, onBack: onBack),
     );
   }
 }

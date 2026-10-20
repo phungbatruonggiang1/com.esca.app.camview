@@ -15,16 +15,31 @@ whole reason detection lives in another process.
 ## Two halves
 
 **`native/`** is `libesca-camview-bridge`: `libesca-camclient` behind a C ABI
-that `dart:ffi` can call. It claims the camera, waits for a frame and
-converts YUV420 to RGBA (BT.601, the same arithmetic `libesca-ui` used) at
-the size the screen shows it, with lookup tables so the per-pixel loop does
-no division. Built by the `esca-camview-bridge` recipe.
+that `dart:ffi` can call. It claims the camera, waits for a frame and copies
+it out as tightly packed I420. It converts nothing. Built by the
+`esca-camview-bridge` recipe.
 
 **`lib/`** is the Flutter application. The bridge blocks, so it runs on its
-own isolate; the UI isolate only receives finished RGBA buffers. The isolate
-holds at most two frames ahead of the screen: when drawing falls behind,
-conversion stops instead of spending a core on frames that would be thrown
-away. Detections are a D-Bus signal, read directly in Dart.
+own isolate, writing into native buffers both isolates can see; only the
+buffer's index crosses between them. The isolate holds at most two frames
+ahead of the screen: when drawing falls behind, it waits instead of filling
+buffers nobody will draw. Detections are a D-Bus signal, read directly in
+Dart.
+
+**`shaders/i420.frag`** turns the frame into colour on the GPU. The I420
+bytes are uploaded unchanged as an RGBA texture a quarter of the capture
+width wide, four bytes to a texel; the shader reads the right byte of each
+plane and applies BT.601, and rotates while it is at it.
+
+## Why the GPU converts
+
+Converting YUV420 to RGBA on the CPU, then handing four bytes a pixel to the
+engine and on to the GPU, cost 1.7 cores on the Pi 4 and held the picture at
+18 fps -- and starved the detector beside it, whose inference time rose from
+about 70 ms to over 300. Uploading the I420 as it is moves 1.5 bytes a
+pixel, and the conversion becomes a few instructions per fragment on a GPU
+that was otherwise idle. `test/i420_shader_test.dart` holds the shader to
+libesca-ui's integer conversion, within rounding, at every rotation.
 
 ## Decisions worth knowing about
 
@@ -34,20 +49,18 @@ trail it slightly; holding frames back to match would halve the frame rate.
 Boxes more than fifteen frames stale are dropped, so a service that stops
 leaves no ghosts behind.
 
-**Never more than 1280 pixels across are converted.** The GPU scales the
-image to the screen for nothing; every pixel converted on the CPU costs.
-
 **The camera is released before exiting.** Leaving through **Trang chủ**
 stops the detector and closes the camera, so neither service keeps a client
 that is gone.
 
 **Rotation is configuration.** A sensor mounted sideways is set with
-`ESCA_CAMVIEW_ROTATE` (90, 180 or 270) in `data/appinfo.json`'s `env`. It
-costs about 2.2× per converted pixel; fixing the mount is cheaper.
+`ESCA_CAMVIEW_ROTATE` (90, 180 or 270) in `data/appinfo.json`'s `env`. The
+shader does the rotating, so it costs nothing measurable.
 
 ## Layout
 
     native/                    libesca-camview-bridge (C++, CMake)
+    shaders/i420.frag          I420 to RGB, on the GPU
     lib/camera_feed.dart       the bridge over dart:ffi, on its own isolate
     lib/vision.dart            esca-visiond over D-Bus
     lib/camview_controller.dart  what the screen shows, and when boxes are stale

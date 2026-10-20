@@ -1,9 +1,10 @@
 // The camera, for dart:ffi.
 //
-// libesca-camclient is C++ and hands over YUV420; Flutter wants a C ABI and
-// RGBA. This is the whole of the translation: claim a camera, wait for a
-// frame, convert it at the size the screen will show it. Detections do not
-// come through here -- they are a D-Bus signal, which Dart reads directly.
+// libesca-camclient is C++; Dart wants a C ABI. This claims a camera and
+// hands over each frame as tightly packed I420. Colour conversion is not done
+// here: the application does it on the GPU, so the CPU only ever copies
+// 1.5 bytes a pixel. Detections do not come through here -- they are a D-Bus
+// signal, which Dart reads directly.
 
 #ifndef ESCA_CAMVIEW_BRIDGE_H
 #define ESCA_CAMVIEW_BRIDGE_H
@@ -27,14 +28,15 @@ void escv_close(escv_camera *camera);
 int escv_width(const escv_camera *camera);
 int escv_height(const escv_camera *camera);
 
-/// Waits up to timeout_ms for the next frame and writes it to dst as RGBA,
-/// out_w by out_h, rotated clockwise by rotation (0, 90, 180 or 270). The
-/// caller picks out_w and out_h with the rotated aspect ratio; the image is
-/// scaled to fill them exactly.
+/// Bytes escv_next_i420 writes: width * height * 3 / 2.
+int escv_i420_size(const escv_camera *camera);
+
+/// Waits up to timeout_ms for the next frame and writes it to dst as I420
+/// with no row padding: the Y plane (width x height), then U, then V (each
+/// width/2 x height/2), whatever stride the camera delivers.
 ///
 /// Returns 1 with *sequence set, 0 on timeout, -1 on an invalid argument.
-int escv_next_rgba(escv_camera *camera, uint8_t *dst, int out_w, int out_h, int rotation,
-                   int timeout_ms, uint64_t *sequence);
+int escv_next_i420(escv_camera *camera, uint8_t *dst, int timeout_ms, uint64_t *sequence);
 
 #ifdef __cplusplus
 }

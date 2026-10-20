@@ -1,24 +1,30 @@
-// Camera frames, from esca-camerad's shared memory to a ui.Image.
+// Camera frames, from esca-camerad's shared memory to a texture.
 //
-// libesca-camview-bridge does the native half (claim the camera, wait for a
-// frame, YUV420 to RGBA). It blocks, so it runs on its own isolate: the UI
-// isolate only ever receives finished RGBA buffers, and a slow frame never
-// holds up a pointer event or an animation.
+// libesca-camview-bridge does the native half: claim the camera, wait for a
+// frame, copy it out as packed I420. It blocks, so it runs on its own
+// isolate. The bytes go straight to the GPU as they are and shaders/i420.frag
+// turns them into colour there: on a Pi 4 converting on the CPU, and
+// uploading four bytes a pixel instead of one and a half, cost more than a
+// core and held the picture under 20 fps.
 
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:isolate';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:ffi/ffi.dart';
 
-/// One frame ready to draw.
+/// One frame ready to draw: the I420 bytes as an RGBA image a quarter of the
+/// capture width wide and one and a half times its height tall, four bytes
+/// to a texel. Only meaningful through shaders/i420.frag.
 class CameraFrame {
-  CameraFrame(this.image, this.sequence);
+  CameraFrame(this.planes, this.sequence, this.width, this.height);
 
-  final ui.Image image;
+  final ui.Image planes;
   final int sequence;
+
+  /// Capture size in pixels, before rotation.
+  final int width, height;
 }
 
 sealed class FeedEvent {}
@@ -43,7 +49,7 @@ class FeedFailed extends FeedEvent {
 abstract interface class FrameSource {
   /// Opens the camera and starts delivering. Events end with [FeedFailed] or
   /// when [stop] completes.
-  Stream<FeedEvent> start({required int rotation});
+  Stream<FeedEvent> start();
 
   /// Releases the camera. Completes once the native side has let go, so the
   /// process can exit without leaving esca-camerad a client that never left.
@@ -58,27 +64,21 @@ typedef _CloseNative = Void Function(Pointer<Void>);
 typedef _Close = void Function(Pointer<Void>);
 typedef _SizeNative = Int32 Function(Pointer<Void>);
 typedef _Size = int Function(Pointer<Void>);
-typedef _NextNative = Int32 Function(
-    Pointer<Void>, Pointer<Uint8>, Int32, Int32, Int32, Int32, Pointer<Uint64>);
-typedef _Next = int Function(Pointer<Void>, Pointer<Uint8>, int, int, int, int, Pointer<Uint64>);
+typedef _NextNative = Int32 Function(Pointer<Void>, Pointer<Uint8>, Int32, Pointer<Uint64>);
+typedef _Next = int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint64>);
 
 const _library = 'libesca-camview-bridge.so';
 
-/// Never convert more pixels than this across: the screen scales the image
-/// up on the GPU for nothing, while every pixel converted here costs CPU.
-const _maxWidth = 1280;
+/// Frames the screen may hold at once. One more buffer than that is
+/// allocated, so the isolate always has one to fill that nobody is reading.
+const _credits = 2;
+const _buffers = _credits + 1;
 
-class _Start {
-  _Start(this.reply, this.rotation);
-  final SendPort reply;
-  final int rotation;
-}
-
-/// The isolate. Frames go out only while the UI holds credits for them, so
-/// when drawing falls behind, conversion stops instead of piling up frames
-/// that would be thrown away.
-Future<void> _frameLoop(_Start start) async {
-  final out = start.reply;
+/// The isolate. It fills native buffers both isolates can see and sends only
+/// which one is ready; a frame is never copied between isolates. Frames go
+/// out only while the UI holds credits for them, so when drawing falls
+/// behind, the isolate waits instead of piling up frames to throw away.
+Future<void> _frameLoop(SendPort out) async {
   final commands = ReceivePort();
   out.send(commands.sendPort);
 
@@ -94,7 +94,8 @@ Future<void> _frameLoop(_Start start) async {
   final close = lib.lookupFunction<_CloseNative, _Close>('escv_close');
   final width = lib.lookupFunction<_SizeNative, _Size>('escv_width');
   final height = lib.lookupFunction<_SizeNative, _Size>('escv_height');
-  final next = lib.lookupFunction<_NextNative, _Next>('escv_next_rgba');
+  final size = lib.lookupFunction<_SizeNative, _Size>('escv_i420_size');
+  final next = lib.lookupFunction<_NextNative, _Next>('escv_next_i420');
 
   final error = calloc<Uint8>(256);
   final camera = open(error.cast<Utf8>(), 256);
@@ -106,17 +107,17 @@ Future<void> _frameLoop(_Start start) async {
   }
   calloc.free(error);
 
-  final w = width(camera), h = height(camera);
-  final sideways = start.rotation == 90 || start.rotation == 270;
-  var outW = sideways ? h : w;
-  var outH = sideways ? w : h;
-  if (outW > _maxWidth) {
-    outH = outH * _maxWidth ~/ outW;
-    outW = _maxWidth;
-  }
-  out.send(['opened', w, h, outW, outH]);
+  final bytes = size(camera);
+  final buffers = [for (var i = 0; i < _buffers; i++) calloc<Uint8>(bytes)];
+  out.send([
+    'opened',
+    width(camera),
+    height(camera),
+    bytes,
+    [for (final b in buffers) b.address]
+  ]);
 
-  var credits = 2;
+  var credits = _credits;
   var running = true;
   Completer<void>? wake;
   commands.listen((message) {
@@ -129,9 +130,8 @@ Future<void> _frameLoop(_Start start) async {
     wake = null;
   });
 
-  final bytes = outW * outH * 4;
-  final buffer = calloc<Uint8>(bytes);
   final sequence = calloc<Uint64>();
+  var slot = 0;
   while (running) {
     if (credits == 0) {
       wake = Completer<void>();
@@ -140,20 +140,20 @@ Future<void> _frameLoop(_Start start) async {
     }
     // A short timeout keeps a stop request from waiting on a camera that
     // has gone quiet.
-    if (next(camera, buffer, outW, outH, start.rotation, 250, sequence) == 1) {
+    if (next(camera, buffers[slot], 250, sequence) == 1) {
       credits--;
-      out.send([
-        'frame',
-        sequence.value,
-        TransferableTypedData.fromList([buffer.asTypedList(bytes)]),
-      ]);
+      out.send(['frame', sequence.value, slot]);
+      slot = (slot + 1) % _buffers;
     }
     // Lets the command port deliver acks and stop between frames.
     await Future<void>.delayed(Duration.zero);
   }
 
   close(camera);
-  calloc.free(buffer);
+  // Freed only now: until 'closed' arrives the UI may still be reading one.
+  for (final buffer in buffers) {
+    calloc.free(buffer);
+  }
   calloc.free(sequence);
   commands.close();
   out.send(['closed']);
@@ -167,11 +167,12 @@ class NativeFrameSource implements FrameSource {
   Completer<void>? _closed;
 
   @override
-  Stream<FeedEvent> start({required int rotation}) {
+  Stream<FeedEvent> start() {
     final events = _events = StreamController<FeedEvent>();
     final port = _port = ReceivePort();
     _closed = Completer<void>();
-    var outW = 0, outH = 0;
+    var width = 0, height = 0, bytes = 0;
+    var buffers = const <int>[];
 
     port.listen((message) async {
       if (message is SendPort) {
@@ -181,16 +182,23 @@ class NativeFrameSource implements FrameSource {
       final m = message as List<Object?>;
       switch (m[0]) {
         case 'opened':
-          outW = m[3]! as int;
-          outH = m[4]! as int;
-          events.add(FeedOpened(m[1]! as int, m[2]! as int));
+          width = m[1]! as int;
+          height = m[2]! as int;
+          bytes = m[3]! as int;
+          buffers = (m[4]! as List<Object?>).cast<int>();
+          events.add(FeedOpened(width, height));
         case 'frame':
-          final pixels = (m[2]! as TransferableTypedData).materialize().asUint8List();
-          final image = await _toImage(pixels, outW, outH);
-          // The credit goes back only once the frame is an image: the
-          // isolate never runs more than two frames ahead of the screen.
+          final pixels = Pointer<Uint8>.fromAddress(buffers[m[2]! as int]).asTypedList(bytes);
+          // The engine takes its own copy here; after that the buffer is the
+          // isolate's again, and the credit goes back.
+          final buffer = await ui.ImmutableBuffer.fromUint8List(pixels);
           _commands?.send('ack');
-          if (!events.isClosed) events.add(FeedFrame(CameraFrame(image, m[1]! as int)));
+          final image = await _toImage(buffer, width ~/ 4, height * 3 ~/ 2);
+          if (events.isClosed) {
+            image.dispose();
+          } else {
+            events.add(FeedFrame(CameraFrame(image, m[1]! as int, width, height)));
+          }
         case 'error':
           events.add(FeedFailed(m[1]! as String));
           _finish();
@@ -199,13 +207,12 @@ class NativeFrameSource implements FrameSource {
       }
     });
 
-    Isolate.spawn(_frameLoop, _Start(port.sendPort, rotation), debugName: 'camera')
+    Isolate.spawn(_frameLoop, port.sendPort, debugName: 'camera')
         .then((isolate) => _isolate = isolate);
     return events.stream;
   }
 
-  static Future<ui.Image> _toImage(Uint8List pixels, int width, int height) async {
-    final buffer = await ui.ImmutableBuffer.fromUint8List(pixels);
+  static Future<ui.Image> _toImage(ui.ImmutableBuffer buffer, int width, int height) async {
     final descriptor = ui.ImageDescriptor.raw(buffer,
         width: width, height: height, pixelFormat: ui.PixelFormat.rgba8888);
     final codec = await descriptor.instantiateCodec();

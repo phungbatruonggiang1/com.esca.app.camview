@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:esca_camview/camera_feed.dart';
 import 'package:esca_camview/camview_controller.dart';
@@ -13,7 +14,7 @@ class FakeFrames implements FrameSource {
   int starts = 0;
 
   @override
-  Stream<FeedEvent> start({required int rotation}) {
+  Stream<FeedEvent> start() {
     starts++;
     controller = StreamController<FeedEvent>();
     return controller!.stream;
@@ -78,7 +79,8 @@ void camTest(String description,
     final frames = FakeFrames();
     final vision = FakeVision(available: visionAvailable);
     final controller = CamviewController(frames: frames, vision: vision);
-    await tester.pumpWidget(CamviewApp(controller: controller, onBack: () {}));
+    final shader = await tester.runAsync(() => ui.FragmentProgram.fromAsset('shaders/i420.frag'));
+    await tester.pumpWidget(CamviewApp(controller: controller, shader: shader!, onBack: () {}));
     await tester.pump();
 
     await body(tester, frames, vision, controller);
@@ -89,8 +91,9 @@ void camTest(String description,
 }
 
 Future<void> pushFrame(WidgetTester tester, FakeFrames frames, int sequence) async {
-  final image = await tester.runAsync(() => createTestImage(width: 64, height: 36));
-  frames.push(FeedFrame(CameraFrame(image!, sequence)));
+  // The packed I420 of a 64x36 frame: 16 texels wide, 54 rows.
+  final planes = await tester.runAsync(() => createTestImage(width: 16, height: 54));
+  frames.push(FeedFrame(CameraFrame(planes!, sequence, 64, 36)));
   await tester.pump();
 }
 
@@ -100,7 +103,7 @@ void main() {
     frames.push(FeedOpened(1280, 720));
     await pushFrame(tester, frames, 1);
     expect(c.status, CameraStatus.streaming);
-    expect(find.byType(RawImage), findsOneWidget);
+    expect(c.frame.value?.sequence, 1);
     expect(find.text('Trực tiếp'), findsOneWidget);
   });
 

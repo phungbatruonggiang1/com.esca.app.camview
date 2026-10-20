@@ -97,7 +97,7 @@ class CamviewController extends ChangeNotifier {
     _cameraError = '';
     notifyListeners();
 
-    _feed = _frames.start(rotation: rotation).listen((event) {
+    _feed = _frames.start().listen((event) {
       switch (event) {
         case FeedOpened(:final width, :final height):
           _captureWidth = width;
@@ -116,7 +116,7 @@ class CamviewController extends ChangeNotifier {
   void _onFrame(CameraFrame next) {
     final previous = frame.value;
     frame.value = next;
-    previous?.image.dispose();
+    previous?.planes.dispose();
 
     _framesThisSecond++;
     final now = DateTime.now();
@@ -204,7 +204,7 @@ class CamviewController extends ChangeNotifier {
     _thresholdDebounce?.cancel();
     _detections.cancel();
     _feed?.cancel();
-    frame.value?.image.dispose();
+    frame.value?.planes.dispose();
     frame.dispose();
     _vision.dispose();
     super.dispose();
