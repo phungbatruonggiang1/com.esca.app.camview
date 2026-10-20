@@ -47,7 +47,9 @@ class CamviewScreen extends StatelessWidget {
                     onBack: onBack,
                     trailing: [
                       if (controller.status == CameraStatus.streaming)
-                        const StatusPill(label: 'Trực tiếp', color: EscaColors.bad, live: true),
+                        // Static: a pulse would make the engine draw at 60 Hz for a picture
+                        // that changes 30 times a second.
+                        const StatusPill(label: 'Trực tiếp', color: EscaColors.bad),
                     ],
                   ),
                   const SizedBox(height: 28),
@@ -425,7 +427,7 @@ class _DetectionControls extends StatelessWidget {
           const SizedBox(height: 4),
           Row(
             children: [
-              PulseDot(color: color, pulsing: controller.detecting, size: 7),
+              PulseDot(color: color, pulsing: false, size: 7),
               const SizedBox(width: 4),
               Expanded(
                 child: Text(status,
