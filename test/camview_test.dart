@@ -99,28 +99,28 @@ Future<void> pushFrame(WidgetTester tester, FakeFrames frames, int sequence) asy
 
 void main() {
   camTest('shows the camera once frames arrive', (tester, frames, vision, c) async {
-    expect(find.text('Đang kết nối camera…'), findsOneWidget);
+    expect(find.text('Connecting to the camera…'), findsOneWidget);
     frames.push(FeedOpened(1280, 720));
     await pushFrame(tester, frames, 1);
     expect(c.status, CameraStatus.streaming);
     expect(c.frame.value?.sequence, 1);
-    expect(find.text('Trực tiếp'), findsOneWidget);
+    expect(find.text('Live'), findsOneWidget);
   });
 
   camTest('a camera that will not open says why, and can be retried',
       (tester, frames, vision, c) async {
     frames.push(FeedFailed('no cameras (is esca-camerad running?)'));
     await tester.pump();
-    expect(find.text('Không mở được camera'), findsOneWidget);
+    expect(find.text('Cannot open the camera'), findsOneWidget);
     expect(find.text('no cameras (is esca-camerad running?)'), findsOneWidget);
 
-    await tester.tap(find.text('Thử lại'));
+    await tester.tap(find.text('Retry'));
     // retry() releases the old feed before opening a new one, and closing a
     // stream completes outside the test's fake clock.
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
     await tester.pump();
     expect(frames.starts, 2);
-    expect(find.text('Đang kết nối camera…'), findsOneWidget);
+    expect(find.text('Connecting to the camera…'), findsOneWidget);
   });
 
   camTest('boxes are listed while fresh and dropped once stale', (tester, frames, vision, c) async {
@@ -149,7 +149,7 @@ void main() {
     await pushFrame(tester, frames, 1);
     expect(c.status, CameraStatus.streaming);
     expect(c.detecting, isFalse);
-    expect(find.text('Dịch vụ nhận diện chưa sẵn sàng'), findsOneWidget);
+    expect(find.text('Detection service is not available'), findsOneWidget);
   }, visionAvailable: false);
 
   camTest('detection can be switched off', (tester, frames, vision, c) async {
@@ -157,6 +157,6 @@ void main() {
     await tester.tap(find.byType(Switch));
     await tester.pump();
     expect(vision.started, isFalse);
-    expect(find.text('Đã tắt — chỉ hiển thị hình'), findsOneWidget);
+    expect(find.text('Off — video only'), findsOneWidget);
   });
 }

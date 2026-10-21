@@ -149,7 +149,7 @@ class CamviewController extends ChangeNotifier {
     } catch (e) {
       // Not fatal: video without boxes is a far better failure than no video.
       _detecting = false;
-      _visionError = 'Dịch vụ nhận diện chưa sẵn sàng';
+      _visionError = 'Detection service is not available';
     }
     _visionBusy = false;
     notifyListeners();

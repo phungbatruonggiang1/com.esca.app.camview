@@ -41,15 +41,15 @@ class CamviewScreen extends StatelessWidget {
                     color: EscaColors.info,
                     title: 'Camera AI',
                     subtitle: controller.captureWidth == 0
-                        ? 'Camera IMX219 · nhận diện vật thể trên board'
-                        : 'Camera IMX219 · ${controller.captureWidth}×${controller.captureHeight}'
-                            ' · nhận diện vật thể trên board',
+                        ? 'IMX219 camera · on-board object detection'
+                        : 'IMX219 camera · ${controller.captureWidth}×${controller.captureHeight}'
+                            ' · on-board object detection',
                     onBack: onBack,
                     trailing: [
                       if (controller.status == CameraStatus.streaming)
                         // Static: a pulse would make the engine draw at 60 Hz for a picture
                         // that changes 30 times a second.
-                        const StatusPill(label: 'Trực tiếp', color: EscaColors.bad),
+                        const StatusPill(label: 'Live', color: EscaColors.bad),
                     ],
                   ),
                   const SizedBox(height: 28),
@@ -100,17 +100,17 @@ class _Viewport extends StatelessWidget {
               CameraStatus.streaming => _Video(controller: controller, shader: shader),
               CameraStatus.connecting => const _Placeholder(
                   icon: Icons.videocam_outlined,
-                  title: 'Đang kết nối camera…',
+                  title: 'Connecting to the camera…',
                   busy: true,
                 ),
               CameraStatus.failed => _Placeholder(
                   icon: Icons.videocam_off_outlined,
-                  title: 'Không mở được camera',
+                  title: 'Cannot open the camera',
                   detail: controller.cameraError,
                   action: FilledButton.icon(
                     onPressed: controller.retry,
                     icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('Thử lại'),
+                    label: const Text('Retry'),
                     style: FilledButton.styleFrom(
                       backgroundColor: EscaColors.info,
                       padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
@@ -364,7 +364,7 @@ class _SidePanel extends StatelessWidget {
           children: [
             Expanded(
               child: MetricTile(
-                label: 'Khung hình',
+                label: 'Frame rate',
                 icon: Icons.speed_rounded,
                 value: streaming ? controller.fps.toStringAsFixed(0) : '—',
                 unit: 'fps',
@@ -373,7 +373,7 @@ class _SidePanel extends StatelessWidget {
             const SizedBox(width: 16),
             Expanded(
               child: MetricTile(
-                label: 'Suy luận',
+                label: 'Inference',
                 icon: Icons.memory_rounded,
                 value: controller.detecting && controller.inferenceMs > 0
                     ? controller.inferenceMs.toStringAsFixed(0)
@@ -401,12 +401,12 @@ class _DetectionControls extends StatelessWidget {
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     final (status, color) = controller.visionBusy
-        ? ('Đang khởi động…', EscaColors.warn)
+        ? ('Starting…', EscaColors.warn)
         : controller.detecting
-            ? ('Đang hoạt động · mỗi ${CamviewController.every} khung', EscaColors.good)
+            ? ('Running · every ${CamviewController.every} frames', EscaColors.good)
             : controller.visionWanted && controller.visionError.isNotEmpty
                 ? (controller.visionError, EscaColors.warn)
-                : ('Đã tắt — chỉ hiển thị hình', EscaColors.textFaint);
+                : ('Off — video only', EscaColors.textFaint);
 
     return EscaCard(
       padding: const EdgeInsets.fromLTRB(22, 18, 16, 18),
@@ -417,7 +417,7 @@ class _DetectionControls extends StatelessWidget {
             children: [
               const Icon(Icons.center_focus_strong_rounded, size: 20, color: EscaColors.info),
               const SizedBox(width: 10),
-              Expanded(child: Text('Nhận diện vật thể', style: text.titleSmall)),
+              Expanded(child: Text('Object detection', style: text.titleSmall)),
               Switch(
                 value: controller.visionWanted,
                 onChanged: controller.visionBusy ? null : controller.setDetection,
@@ -438,7 +438,8 @@ class _DetectionControls extends StatelessWidget {
           const SizedBox(height: 18),
           Row(
             children: [
-              Text('Ngưỡng tin cậy', style: text.bodyMedium?.copyWith(color: EscaColors.textDim)),
+              Text('Confidence threshold',
+                  style: text.bodyMedium?.copyWith(color: EscaColors.textDim)),
               const Spacer(),
               Text('${(controller.threshold * 100).round()}%', style: text.titleSmall),
             ],
@@ -485,7 +486,7 @@ class _ObjectsCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Text('Vật thể trong khung', style: text.titleSmall),
+              Text('Objects in view', style: text.titleSmall),
               const Spacer(),
               Text('${controller.visible.length}',
                   style: text.titleSmall?.copyWith(
@@ -498,7 +499,9 @@ class _ObjectsCard extends StatelessWidget {
             child: rows.isEmpty
                 ? Center(
                     child: Text(
-                      controller.detecting ? 'Chưa thấy vật thể nào' : 'Bật nhận diện để xem',
+                      controller.detecting
+                          ? 'Nothing detected yet'
+                          : 'Turn detection on to see objects',
                       style: text.bodyMedium?.copyWith(color: EscaColors.textFaint),
                     ),
                   )

@@ -49,7 +49,7 @@ trail it slightly; holding frames back to match would halve the frame rate.
 Boxes more than fifteen frames stale are dropped, so a service that stops
 leaves no ghosts behind.
 
-**The camera is released before exiting.** Leaving through **Trang chủ**
+**The camera is released before exiting.** Leaving through **Home**
 stops the detector and closes the camera, so neither service keeps a client
 that is gone.
 
