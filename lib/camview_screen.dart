@@ -152,7 +152,7 @@ class _Video extends StatelessWidget {
             valueListenable: controller.frame,
             builder: (context, frame, _) => _GlassChip(
               icon: Icons.tag_rounded,
-              label: 'khung ${frame?.sequence ?? 0}',
+              label: 'frame ${frame?.sequence ?? 0}',
             ),
           ),
         ),
